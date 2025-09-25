@@ -26,9 +26,24 @@ with col1:
     ro_file = st.file_uploader("Upload your RO Excel file", type=['xlsx', 'xls'], key="ro")
 
 with col2:
-    st.subheader("🔗 Linked Lines (Optional)")
-    linked_file = st.file_uploader("Upload your Linked Lines file (.xlsx format)", type=['xlsx', 'xls'], key="linked")
-    st.caption("⚠️ Please convert .xlsb files to .xlsx before uploading")
+    st.subheader("🔗 Linked Lines")
+    
+    # Check if default linked lines file exists in the repository
+    use_default_linked = st.checkbox("Use default Linked Lines file", value=True)
+    
+    if use_default_linked:
+        try:
+            # Try to load the default file from the repository
+            linked_file = pd.ExcelFile("linked_lines_default.xlsx")
+            st.success("✅ Using default Linked Lines file")
+            st.caption("Uncheck above to upload a different version")
+        except:
+            st.warning("Default file not found in repository")
+            st.caption("Upload the default file to GitHub as 'linked_lines_default.xlsx'")
+            linked_file = st.file_uploader("Upload your Linked Lines file (.xlsx format)", type=['xlsx', 'xls'], key="linked")
+    else:
+        linked_file = st.file_uploader("Upload a different Linked Lines file (.xlsx format)", type=['xlsx', 'xls'], key="linked")
+        st.caption("⚠️ Please convert .xlsb files to .xlsx before uploading")
     
 # Threshold setting
 st.sidebar.header("⚙️ Settings")
@@ -64,12 +79,20 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             status.text("Processing linked lines...")
             progress.progress(10)
             
-            # Read the linked lines file - using the "Linked" tab
+            # Read the linked lines file - handling both uploaded files and default file
             try:
-                linked_df = pd.read_excel(linked_file, sheet_name='Linked')
+                # Check if it's already a pandas ExcelFile object (from default)
+                if isinstance(linked_file, pd.ExcelFile):
+                    linked_df = linked_file.parse('Linked')
+                else:
+                    # It's an uploaded file
+                    linked_df = pd.read_excel(linked_file, sheet_name='Linked')
             except Exception as e:
                 st.warning(f"Could not read 'Linked' sheet, trying first sheet: {str(e)}")
-                linked_df = pd.read_excel(linked_file)
+                if isinstance(linked_file, pd.ExcelFile):
+                    linked_df = linked_file.parse(0)  # First sheet
+                else:
+                    linked_df = pd.read_excel(linked_file)
             
             # Process the Linked tab structure
             linked_data_list = []
