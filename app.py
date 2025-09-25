@@ -33,12 +33,17 @@ with col2:
 # Threshold setting
 st.sidebar.header("⚙️ Settings")
 THRESHOLD = st.sidebar.slider(
-    "Minimum stock threshold",
+    "Minimum (Stock + L28 Sales) threshold",
     min_value=1,
     max_value=10,
-    value=3,
-    help="Flag allocations to stores with less than this many units on hand"
+    value=4,
+    help="Flag allocations to stores where (On Hand + 28-day Sales) is less than this threshold"
 )
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**New Logic:**")
+st.sidebar.markdown("✅ Dimensions are grouped together")
+st.sidebar.markdown("✅ 28-day sales count as proof of carrying the style")
 
 # Add a button to process
 if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
@@ -129,45 +134,61 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         col3.metric("Unique Products", f"{working_df['ProdReference'].nunique():,}")
         
         # ========================================
-        # STEP 3: Apply Linked Lines Logic
+        # STEP 3: Apply Grouping Logic (Linked Lines + Dimensions)
         # ========================================
-        status.text("Applying linked lines logic...")
+        status.text("Applying grouping logic...")
         progress.progress(50)
         
         def get_product_group(prod_ref):
-            # First try exact match
-            if prod_ref in product_to_group:
-                group = product_to_group[prod_ref]
+            # First, get base product without dimension
+            base_product = prod_ref
+            has_dimension = False
+            
+            # Check if product has dimension (ends with _XX where XX is numbers)
+            if '_' in prod_ref:
+                parts = prod_ref.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    base_product = parts[0]
+                    has_dimension = True
+            
+            # Check if base product is in linked groups
+            if base_product in product_to_group:
+                group = product_to_group[base_product]
                 if group in linked_groups:
                     return f"Group_{group}"
             
-            # If no exact match, try removing common suffixes
-            base_ref = prod_ref
-            if prod_ref.endswith('_R'):
-                base_ref = prod_ref[:-2]
-                if base_ref in product_to_group:
-                    group = product_to_group[base_ref]
+            # Try without _R suffix for linked lines matching
+            if base_product.endswith('_R'):
+                base_no_r = base_product[:-2]
+                if base_no_r in product_to_group:
+                    group = product_to_group[base_no_r]
                     if group in linked_groups:
                         return f"Group_{group}"
             
-            # Check for prefix matches
+            # Check for prefix matches with linked products
             for linked_prod, group in product_to_group.items():
                 if group in linked_groups:
-                    if prod_ref.startswith(linked_prod) or linked_prod.startswith(prod_ref):
+                    if base_product.startswith(linked_prod) or linked_prod.startswith(base_product):
                         return f"Group_{group}"
             
+            # If not linked but has dimension, group by base product
+            if has_dimension:
+                return f"Dim_{base_product}"
+            
+            # No grouping found, return original
             return prod_ref
         
-        if linked_file:
-            working_df['Product_Group'] = working_df['ProdReference'].apply(get_product_group)
-            grouped_products = working_df[working_df['Product_Group'].str.startswith('Group_')]['ProdReference'].nunique()
-            if grouped_products > 0:
-                st.info(f"🔗 {grouped_products} products matched to linked groups")
-        else:
-            working_df['Product_Group'] = working_df['ProdReference']
+        working_df['Product_Group'] = working_df['ProdReference'].apply(get_product_group)
+        
+        # Count grouped products
+        grouped_products = working_df[working_df['Product_Group'].str.startswith(('Group_', 'Dim_'))]['ProdReference'].nunique()
+        if grouped_products > 0:
+            linked_count = working_df[working_df['Product_Group'].str.startswith('Group_')]['ProdReference'].nunique()
+            dim_count = working_df[working_df['Product_Group'].str.startswith('Dim_')]['ProdReference'].nunique()
+            st.info(f"🔗 {linked_count} products in linked groups | 📏 {dim_count} products grouped by dimension")
         
         # ========================================
-        # STEP 4: Detect Misallocations
+        # STEP 4: Detect Misallocations with New Logic
         # ========================================
         status.text("Detecting misallocations...")
         progress.progress(70)
@@ -186,9 +207,13 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         allocations = allocations.merge(store_product_stock, on=['Store_Code', 'Product_Group'], how='left')
         allocations = allocations.merge(store_product_sales, on=['Store_Code', 'Product_Group'], how='left')
         
-        # Flag misallocations
-        allocations['Is_Misallocation'] = allocations['Total_Store_Stock'] < THRESHOLD
+        # NEW LOGIC: Flag misallocations based on (Stock + L28 Sales) < Threshold
+        allocations['Combined_Metric'] = allocations['Total_Store_Stock'] + allocations['Total_Sales_28']
+        allocations['Is_Misallocation'] = allocations['Combined_Metric'] < THRESHOLD
+        
+        # Add flags for grouped products
         allocations['Is_Linked'] = allocations['Product_Group'].str.startswith('Group_')
+        allocations['Is_Dimension_Grouped'] = allocations['Product_Group'].str.startswith('Dim_')
         
         misallocations = allocations[allocations['Is_Misallocation']].copy()
         
@@ -217,6 +242,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             
             # Create summary
             st.subheader("📋 Flagged Allocations")
+            st.caption(f"Showing allocations where (On Hand + L28 Sales) < {THRESHOLD}")
             
             summary_data = []
             for store in misallocations['Store_Code'].unique():
@@ -226,28 +252,32 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     group_data = store_misalloc[store_misalloc['Product_Group'] == prod_group]
                     products_in_group = group_data['ProdReference'].unique()
                     
-                    linked_info = ""
-                    if prod_group.startswith('Group_') and linked_file:
-                        group_num = float(prod_group.replace('Group_', ''))
-                        if group_num in group_to_products:
-                            all_linked = group_to_products[group_num]
-                            other_linked = [p for p in all_linked if p not in products_in_group]
-                            if other_linked:
-                                linked_info = ", ".join(other_linked[:3])
-                                if len(other_linked) > 3:
-                                    linked_info += f" +{len(other_linked)-3} more"
+                    # Determine group type
+                    group_type = ""
+                    if prod_group.startswith('Group_'):
+                        group_type = "Linked"
+                        if linked_file:
+                            group_num = float(prod_group.replace('Group_', ''))
+                            if group_num in group_to_products:
+                                all_linked = group_to_products[group_num]
+                                other_linked = [p for p in all_linked if p not in products_in_group]
+                                if other_linked:
+                                    group_type = f"Linked with {len(other_linked)} others"
+                    elif prod_group.startswith('Dim_'):
+                        group_type = "Dimension Group"
                     
                     summary_data.append({
                         'Store': store,
                         'Product': ', '.join(products_in_group[:2]) + (f' +{len(products_in_group)-2}' if len(products_in_group) > 2 else ''),
-                        'Current Stock': int(group_data['Total_Store_Stock'].iloc[0]),
+                        'On Hand': int(group_data['Total_Store_Stock'].iloc[0]),
+                        'L28 Sales': int(group_data['Total_Sales_28'].iloc[0]),
+                        'Combined': int(group_data['Combined_Metric'].iloc[0]),
                         'Units to Send': int(group_data['Quantity'].sum()),
-                        '28-Day Sales': int(group_data['Total_Sales_28'].iloc[0]),
-                        'Linked With': linked_info if linked_info else '-'
+                        'Group Type': group_type if group_type else '-'
                     })
             
             summary_df = pd.DataFrame(summary_data)
-            summary_df = summary_df.sort_values(['Current Stock', 'Units to Send'], ascending=[True, False])
+            summary_df = summary_df.sort_values(['Combined', 'Units to Send'], ascending=[True, False])
             
             # Display table with formatting
             st.dataframe(
@@ -256,9 +286,10 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 hide_index=True,
                 column_config={
                     "Store": st.column_config.TextColumn("Store", width="small"),
-                    "Current Stock": st.column_config.NumberColumn("Current Stock", format="%d"),
+                    "On Hand": st.column_config.NumberColumn("On Hand", format="%d"),
+                    "L28 Sales": st.column_config.NumberColumn("L28 Sales", format="%d"),
+                    "Combined": st.column_config.NumberColumn("Combined", format="%d", help="On Hand + L28 Sales"),
                     "Units to Send": st.column_config.NumberColumn("To Send", format="%d"),
-                    "28-Day Sales": st.column_config.NumberColumn("28-Day Sales", format="%d"),
                 }
             )
             
@@ -294,7 +325,7 @@ st.sidebar.markdown("### How it works")
 st.sidebar.markdown("""
 1. Upload your RO allocation file
 2. Optionally upload Linked Lines for grouped products
-3. RedFlag checks if stores have sufficient stock
+3. RedFlag checks: (On Hand + L28 Sales) ≥ Threshold
 4. Review flagged allocations before shipping
 """)
 
@@ -311,6 +342,13 @@ st.sidebar.markdown("""
 - Use the 'Linked' tab
 - Column B: Order indicator (1 = new group)
 - ⚠️ Must be .xlsx format (not .xlsb)
+""")
+
+st.sidebar.markdown("### Grouping Logic")
+st.sidebar.markdown("""
+Products are grouped by:
+- **Linked Lines**: From your file
+- **Dimensions**: Same style/color, different dimension (_30, _32, etc.)
 """)
 
 st.sidebar.markdown("### Support")
