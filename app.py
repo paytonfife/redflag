@@ -374,16 +374,16 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             summary_df = pd.DataFrame(summary_data)
             summary_df = summary_df.sort_values(['Combined', 'Units to Send'], ascending=[True, False])
             
-            # Apply styling for special doors
+           # Apply styling for special doors
             def highlight_special_doors(row):
                 if row['Is_Special']:
                     return ['background-color: #e0e0e0'] * len(row)
                 return [''] * len(row)
-            
+        
+            # Apply styling to the dataframe that still has Is_Special
+            styled_df = summary_df.style.apply(highlight_special_doors, axis=1)
+        
             # Display table with formatting
-            display_df = summary_df.drop(columns=['Is_Special'])
-            styled_df = display_df.style.apply(highlight_special_doors, axis=1)
-            
             st.dataframe(
                 styled_df,
                 use_container_width=True,
