@@ -282,13 +282,13 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         progress.progress(80)
         
         # Get unique SKUs with their warehouse quantities (only count each SKU once)
-        unique_skus = working_df[['SKU', 'Base_Product', 'ProdReference', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
+        unique_skus = working_df[['SKU', 'Product_Group', 'Base_Product', 'ProdReference', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
         
-        # Group by base product to get total warehouse inventory
-        product_wh_summary = unique_skus.groupby('Base_Product').agg({
+        # Group by Product_Group (which includes linked lines) to get total warehouse inventory
+        product_wh_summary = unique_skus.groupby('Product_Group').agg({
             'Wh_Stock': 'sum'
         }).reset_index()
-        product_wh_summary.columns = ['Base_Product', 'Warehouse_Remaining']
+        product_wh_summary.columns = ['Product_Group', 'Warehouse_Remaining']
         
         # Flag products that should go all-out
         product_wh_summary['Should_AllOut_USA'] = (
@@ -434,7 +434,14 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             
             allout_display = []
             for _, row in allout_candidates.iterrows():
-                base_prod = row['Base_Product']
+                prod_group = row['Product_Group']
+                
+                # Get a representative product from this group for display
+                group_products = unique_skus[unique_skus['Product_Group'] == prod_group]['ProdReference'].unique()
+                display_product = group_products[0] if len(group_products) > 0 else prod_group
+                
+                # Get the base product for name lookup
+                base_prod = get_base_product(display_product)
                 
                 # Get product name and color
                 product_display = ""
@@ -451,8 +458,15 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 else:
                     threshold_type = f"CDA (<{CDA_ALLOUT_THRESHOLD})"
                 
+                # Show group info
+                group_info = ""
+                if prod_group.startswith('Group_'):
+                    group_info = f" (Linked: {len(group_products)} products)"
+                elif prod_group.startswith('Dim_'):
+                    group_info = f" (Dimensions: {len(group_products)} sizes)"
+                
                 allout_display.append({
-                    'Product': base_prod,
+                    'Product': display_product + group_info,
                     'Name': product_display if product_display else '-',
                     'Warehouse Remaining': int(row['Warehouse_Remaining']),
                     'Threshold': threshold_type
