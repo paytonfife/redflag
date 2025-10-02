@@ -160,15 +160,16 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         df = pd.read_excel(ro_file)
         
         # Create working dataframe with required columns
-        # Using column positions (A=0, G=6, H=7, I=8, M=12, Y=24)
-        working_df = df[[df.columns[i] for i in [0, 6, 7, 8, 12, 24]]].copy()
-        working_df.columns = ['Store_Code', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28']
+        # Using column positions (A=0, G=6, H=7, I=8, M=12, Y=24, W=22)
+        working_df = df[[df.columns[i] for i in [0, 6, 7, 8, 12, 24, 22]]].copy()
+        working_df.columns = ['Store_Code', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28', 'Wh_Stock']
         
         # Clean the data
         working_df['Store_Code'] = working_df['Store_Code'].astype(str)
         working_df['Store_Stock'] = pd.to_numeric(working_df['Store_Stock'], errors='coerce').fillna(0)
         working_df['Quantity'] = pd.to_numeric(working_df['Quantity'], errors='coerce').fillna(0)
         working_df['Quantity_28'] = pd.to_numeric(working_df['Quantity_28'], errors='coerce').fillna(0)
+        working_df['Wh_Stock'] = pd.to_numeric(working_df['Wh_Stock'], errors='coerce').fillna(0)
         
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Rows", f"{len(working_df):,}")
@@ -232,6 +233,9 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         working_df['Base_Product'] = working_df['ProdReference'].apply(get_base_product)
         working_df['Product_Group'] = working_df['ProdReference'].apply(get_product_group)
         
+        # Create unique SKU identifier for warehouse calculations
+        working_df['SKU'] = working_df['ProdReference'] + '_' + working_df['Size'].astype(str)
+        
         # Count grouped products
         grouped_products = working_df[working_df['Product_Group'].str.startswith(('Group_', 'Dim_'))]['ProdReference'].nunique()
         if grouped_products > 0:
@@ -277,28 +281,27 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         status.text("Checking all-out strategy...")
         progress.progress(80)
         
-        # Calculate total inventory and allocations by base product
-        product_summary = working_df.groupby('Base_Product').agg({
-            'Store_Stock': 'sum',
-            'Quantity': 'sum'
+        # Get unique SKUs with their warehouse quantities (only count each SKU once)
+        unique_skus = working_df[['SKU', 'Base_Product', 'ProdReference', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
+        
+        # Group by base product to get total warehouse inventory
+        product_wh_summary = unique_skus.groupby('Base_Product').agg({
+            'Wh_Stock': 'sum'
         }).reset_index()
-        product_summary.columns = ['Base_Product', 'Total_OnHand', 'Total_Allocated']
-        product_summary['Remaining_After_Alloc'] = product_summary['Total_OnHand'] - product_summary['Total_Allocated']
+        product_wh_summary.columns = ['Base_Product', 'Warehouse_Remaining']
         
         # Flag products that should go all-out
-        # For now, we'll assume USA warehouse - in practice you'd need to identify which warehouse
-        # This could be enhanced with warehouse identification logic
-        product_summary['Should_AllOut_USA'] = (
-            (product_summary['Remaining_After_Alloc'] > 0) & 
-            (product_summary['Remaining_After_Alloc'] < USA_ALLOUT_THRESHOLD)
+        product_wh_summary['Should_AllOut_USA'] = (
+            (product_wh_summary['Warehouse_Remaining'] > 0) & 
+            (product_wh_summary['Warehouse_Remaining'] < USA_ALLOUT_THRESHOLD)
         )
-        product_summary['Should_AllOut_CDA'] = (
-            (product_summary['Remaining_After_Alloc'] > 0) & 
-            (product_summary['Remaining_After_Alloc'] < CDA_ALLOUT_THRESHOLD)
+        product_wh_summary['Should_AllOut_CDA'] = (
+            (product_wh_summary['Warehouse_Remaining'] > 0) & 
+            (product_wh_summary['Warehouse_Remaining'] < CDA_ALLOUT_THRESHOLD)
         )
-        product_summary['Should_AllOut'] = product_summary['Should_AllOut_USA'] | product_summary['Should_AllOut_CDA']
+        product_wh_summary['Should_AllOut'] = product_wh_summary['Should_AllOut_USA'] | product_wh_summary['Should_AllOut_CDA']
         
-        allout_candidates = product_summary[product_summary['Should_AllOut']].copy()
+        allout_candidates = product_wh_summary[product_wh_summary['Should_AllOut']].copy()
         
         # ========================================
         # STEP 5: Display Results - Misallocations
@@ -374,15 +377,15 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             summary_df = pd.DataFrame(summary_data)
             summary_df = summary_df.sort_values(['Combined', 'Units to Send'], ascending=[True, False])
             
-           # Apply styling for special doors
+            # Apply styling for special doors
             def highlight_special_doors(row):
                 if row['Is_Special']:
                     return ['background-color: #e0e0e0'] * len(row)
                 return [''] * len(row)
-        
+            
             # Apply styling to the dataframe that still has Is_Special
             styled_df = summary_df.style.apply(highlight_special_doors, axis=1)
-        
+            
             # Display table with formatting
             st.dataframe(
                 styled_df,
@@ -419,13 +422,12 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         
         if len(allout_candidates) > 0:
             st.warning(f"📦 **ALL-OUT STRATEGY: {len(allout_candidates)} styles should go all-out**")
-            st.caption(f"Showing styles with < {USA_ALLOUT_THRESHOLD} units (USA) or < {CDA_ALLOUT_THRESHOLD} units (CDA) remaining after allocation")
+            st.caption(f"Showing styles with < {USA_ALLOUT_THRESHOLD} units (USA) or < {CDA_ALLOUT_THRESHOLD} units (CDA) remaining in warehouse")
             
             # Statistics
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             col1.metric("Styles Affected", f"{len(allout_candidates)}")
-            col2.metric("Units Left Behind", f"{allout_candidates['Remaining_After_Alloc'].sum():,}")
-            col3.metric("Additional Units to Allocate", f"{allout_candidates['Remaining_After_Alloc'].sum():,}")
+            col2.metric("Units Left in Warehouse", f"{allout_candidates['Warehouse_Remaining'].sum():,}")
             
             # Create all-out summary
             st.subheader("📋 All-Out Candidates")
@@ -452,14 +454,12 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 allout_display.append({
                     'Product': base_prod,
                     'Name': product_display if product_display else '-',
-                    'Total On Hand': int(row['Total_OnHand']),
-                    'Currently Allocated': int(row['Total_Allocated']),
-                    'Will Remain': int(row['Remaining_After_Alloc']),
+                    'Warehouse Remaining': int(row['Warehouse_Remaining']),
                     'Threshold': threshold_type
                 })
             
             allout_df = pd.DataFrame(allout_display)
-            allout_df = allout_df.sort_values('Will Remain', ascending=True)
+            allout_df = allout_df.sort_values('Warehouse Remaining', ascending=True)
             
             st.dataframe(
                 allout_df,
@@ -468,9 +468,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 column_config={
                     "Product": st.column_config.TextColumn("Product", width="medium"),
                     "Name": st.column_config.TextColumn("Product Name", width="medium"),
-                    "Total On Hand": st.column_config.NumberColumn("Total On Hand", format="%d"),
-                    "Currently Allocated": st.column_config.NumberColumn("Allocated", format="%d"),
-                    "Will Remain": st.column_config.NumberColumn("Will Remain", format="%d"),
+                    "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d"),
                     "Threshold": st.column_config.TextColumn("Threshold", width="small")
                 }
             )
@@ -519,6 +517,7 @@ st.sidebar.markdown("""
 - I: Store Stock
 - M: Quantity to send
 - Y: 28-day sales
+- W: Warehouse stock remaining
 
 **Linked Lines:**
 - Use the 'Linked' tab
