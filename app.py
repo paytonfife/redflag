@@ -32,18 +32,11 @@ with col2:
     use_default_linked = st.checkbox("Use default Linked Lines file", value=True)
     
     if use_default_linked:
-        try:
-            # Try to load the default file from the repository
-            linked_file = pd.ExcelFile("linked_lines_default.xlsx")
-            st.success("✅ Using default Linked Lines file")
-            st.caption("Uncheck above to upload a different version")
-        except:
-            st.warning("Default file not found in repository")
-            st.caption("Upload the default file to GitHub as 'linked_lines_default.xlsx'")
-            linked_file = st.file_uploader("Upload your Linked Lines file (.xlsx format)", type=['xlsx', 'xls'], key="linked")
+        linked_file = "linked_lines_default.xlsx"
+        st.success("✅ Using default Linked Lines file")
+        st.caption("Uncheck above to upload a different version")
     else:
         linked_file = st.file_uploader("Upload a different Linked Lines file (.xlsx format)", type=['xlsx', 'xls'], key="linked")
-        st.caption("⚠️ Please convert .xlsb files to .xlsx before uploading")
     
 # Threshold setting
 st.sidebar.header("⚙️ Settings")
@@ -55,10 +48,32 @@ THRESHOLD = st.sidebar.slider(
     help="Flag allocations to stores where (On Hand + 28-day Sales) is less than this threshold"
 )
 
+# All-out threshold settings
+st.sidebar.markdown("---")
+st.sidebar.subheader("📦 All-Out Strategy")
+USA_ALLOUT_THRESHOLD = st.sidebar.number_input(
+    "USA Warehouse Threshold",
+    min_value=0,
+    max_value=100,
+    value=40,
+    help="Flag styles with less than this many units remaining in USA warehouse"
+)
+CDA_ALLOUT_THRESHOLD = st.sidebar.number_input(
+    "CDA Warehouse Threshold",
+    min_value=0,
+    max_value=100,
+    value=30,
+    help="Flag styles with less than this many units remaining in CDA warehouse"
+)
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("**New Logic:**")
 st.sidebar.markdown("✅ Dimensions are grouped together")
 st.sidebar.markdown("✅ 28-day sales count as proof of carrying the style")
+
+# Special door constants
+ECOM_DOORS = ['883', '886']
+CLEARANCE_DOORS = ['3017', '3221', '7003']
 
 # Add a button to process
 if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
@@ -74,25 +89,18 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         product_to_group = {}
         group_to_products = {}
         linked_groups = {}
+        product_to_details = {}  # NEW: Store product names and colors
         
         if linked_file:
             status.text("Processing linked lines...")
             progress.progress(10)
             
-            # Read the linked lines file - handling both uploaded files and default file
+            # Read the linked lines file
             try:
-                # Check if it's already a pandas ExcelFile object (from default)
-                if isinstance(linked_file, pd.ExcelFile):
-                    linked_df = linked_file.parse('Linked')
-                else:
-                    # It's an uploaded file
-                    linked_df = pd.read_excel(linked_file, sheet_name='Linked')
+                linked_df = pd.read_excel(linked_file, sheet_name='Linked')
             except Exception as e:
                 st.warning(f"Could not read 'Linked' sheet, trying first sheet: {str(e)}")
-                if isinstance(linked_file, pd.ExcelFile):
-                    linked_df = linked_file.parse(0)  # First sheet
-                else:
-                    linked_df = pd.read_excel(linked_file)
+                linked_df = pd.read_excel(linked_file)
             
             # Process the Linked tab structure
             linked_data_list = []
@@ -101,6 +109,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             for idx, row in linked_df.iterrows():
                 product_ref = row.iloc[0] if len(row) > 0 else None
                 order_in = row.iloc[1] if len(row) > 1 else None
+                style_name = row.iloc[3] if len(row) > 3 else None  # Column D
+                color = row.iloc[4] if len(row) > 4 else None  # Column E
                 
                 if pd.isna(product_ref) or pd.isna(order_in):
                     continue
@@ -113,9 +123,17 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 if order_val == 1:
                     current_group += 1
                 
+                # Store product details
+                product_key = str(product_ref).strip()
+                if not pd.isna(style_name) or not pd.isna(color):
+                    product_to_details[product_key] = {
+                        'style_name': str(style_name) if not pd.isna(style_name) else '',
+                        'color': str(color) if not pd.isna(color) else ''
+                    }
+                
                 linked_data_list.append({
                     'Group': current_group,
-                    'ProdReference': str(product_ref).strip()
+                    'ProdReference': product_key
                 })
             
             linked_df_cols = pd.DataFrame(linked_data_list)
@@ -147,6 +165,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         working_df.columns = ['Store_Code', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28']
         
         # Clean the data
+        working_df['Store_Code'] = working_df['Store_Code'].astype(str)
         working_df['Store_Stock'] = pd.to_numeric(working_df['Store_Stock'], errors='coerce').fillna(0)
         working_df['Quantity'] = pd.to_numeric(working_df['Quantity'], errors='coerce').fillna(0)
         working_df['Quantity_28'] = pd.to_numeric(working_df['Quantity_28'], errors='coerce').fillna(0)
@@ -162,17 +181,26 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         status.text("Applying grouping logic...")
         progress.progress(50)
         
-        def get_product_group(prod_ref):
-            # First, get base product without dimension
+        def get_base_product(prod_ref):
+            """Extract base product without dimension suffix"""
             base_product = prod_ref
-            has_dimension = False
+            
+            # Remove _R suffix
+            if base_product.endswith('_R'):
+                base_product = base_product[:-2]
             
             # Check if product has dimension (ends with _XX where XX is numbers)
-            if '_' in prod_ref:
-                parts = prod_ref.rsplit('_', 1)
+            if '_' in base_product:
+                parts = base_product.rsplit('_', 1)
                 if len(parts) == 2 and parts[1].isdigit():
                     base_product = parts[0]
-                    has_dimension = True
+            
+            return base_product
+        
+        def get_product_group(prod_ref):
+            # Get base product without dimension
+            base_product = get_base_product(prod_ref)
+            has_dimension = base_product != prod_ref.replace('_R', '')
             
             # Check if base product is in linked groups
             if base_product in product_to_group:
@@ -201,6 +229,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             # No grouping found, return original
             return prod_ref
         
+        working_df['Base_Product'] = working_df['ProdReference'].apply(get_base_product)
         working_df['Product_Group'] = working_df['ProdReference'].apply(get_product_group)
         
         # Count grouped products
@@ -234,14 +263,45 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         allocations['Combined_Metric'] = allocations['Total_Store_Stock'] + allocations['Total_Sales_28']
         allocations['Is_Misallocation'] = allocations['Combined_Metric'] < THRESHOLD
         
-        # Add flags for grouped products
+        # Add flags for grouped products and special doors
         allocations['Is_Linked'] = allocations['Product_Group'].str.startswith('Group_')
         allocations['Is_Dimension_Grouped'] = allocations['Product_Group'].str.startswith('Dim_')
+        allocations['Is_ECOM'] = allocations['Store_Code'].isin(ECOM_DOORS)
+        allocations['Is_Clearance'] = allocations['Store_Code'].isin(CLEARANCE_DOORS)
         
         misallocations = allocations[allocations['Is_Misallocation']].copy()
         
         # ========================================
-        # STEP 5: Display Results
+        # STEP 4.5: Calculate All-Out Candidates
+        # ========================================
+        status.text("Checking all-out strategy...")
+        progress.progress(80)
+        
+        # Calculate total inventory and allocations by base product
+        product_summary = working_df.groupby('Base_Product').agg({
+            'Store_Stock': 'sum',
+            'Quantity': 'sum'
+        }).reset_index()
+        product_summary.columns = ['Base_Product', 'Total_OnHand', 'Total_Allocated']
+        product_summary['Remaining_After_Alloc'] = product_summary['Total_OnHand'] - product_summary['Total_Allocated']
+        
+        # Flag products that should go all-out
+        # For now, we'll assume USA warehouse - in practice you'd need to identify which warehouse
+        # This could be enhanced with warehouse identification logic
+        product_summary['Should_AllOut_USA'] = (
+            (product_summary['Remaining_After_Alloc'] > 0) & 
+            (product_summary['Remaining_After_Alloc'] < USA_ALLOUT_THRESHOLD)
+        )
+        product_summary['Should_AllOut_CDA'] = (
+            (product_summary['Remaining_After_Alloc'] > 0) & 
+            (product_summary['Remaining_After_Alloc'] < CDA_ALLOUT_THRESHOLD)
+        )
+        product_summary['Should_AllOut'] = product_summary['Should_AllOut_USA'] | product_summary['Should_AllOut_CDA']
+        
+        allout_candidates = product_summary[product_summary['Should_AllOut']].copy()
+        
+        # ========================================
+        # STEP 5: Display Results - Misallocations
         # ========================================
         status.text("Generating report...")
         progress.progress(90)
@@ -274,6 +334,13 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 for prod_group in store_misalloc['Product_Group'].unique():
                     group_data = store_misalloc[store_misalloc['Product_Group'] == prod_group]
                     products_in_group = group_data['ProdReference'].unique()
+                    base_product = group_data['Base_Product'].iloc[0]
+                    
+                    # Get product name and color
+                    product_display = ""
+                    if base_product in product_to_details:
+                        details = product_to_details[base_product]
+                        product_display = f"{details['style_name']} {details['color']}".strip()
                     
                     # Determine group type
                     group_type = ""
@@ -289,26 +356,41 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     elif prod_group.startswith('Dim_'):
                         group_type = "Dimension Group"
                     
+                    # Check if special door
+                    is_special = group_data['Is_ECOM'].iloc[0] or group_data['Is_Clearance'].iloc[0]
+                    
                     summary_data.append({
                         'Store': store,
                         'Product': ', '.join(products_in_group[:2]) + (f' +{len(products_in_group)-2}' if len(products_in_group) > 2 else ''),
+                        'Name': product_display if product_display else '-',
                         'On Hand': int(group_data['Total_Store_Stock'].iloc[0]),
                         'L28 Sales': int(group_data['Total_Sales_28'].iloc[0]),
                         'Combined': int(group_data['Combined_Metric'].iloc[0]),
                         'Units to Send': int(group_data['Quantity'].sum()),
-                        'Group Type': group_type if group_type else '-'
+                        'Group Type': group_type if group_type else '-',
+                        'Is_Special': is_special
                     })
             
             summary_df = pd.DataFrame(summary_data)
             summary_df = summary_df.sort_values(['Combined', 'Units to Send'], ascending=[True, False])
             
+            # Apply styling for special doors
+            def highlight_special_doors(row):
+                if row['Is_Special']:
+                    return ['background-color: #e0e0e0'] * len(row)
+                return [''] * len(row)
+            
             # Display table with formatting
+            display_df = summary_df.drop(columns=['Is_Special'])
+            styled_df = display_df.style.apply(highlight_special_doors, axis=1)
+            
             st.dataframe(
-                summary_df,
+                styled_df,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
                     "Store": st.column_config.TextColumn("Store", width="small"),
+                    "Name": st.column_config.TextColumn("Product Name", width="medium"),
                     "On Hand": st.column_config.NumberColumn("On Hand", format="%d"),
                     "L28 Sales": st.column_config.NumberColumn("L28 Sales", format="%d"),
                     "Combined": st.column_config.NumberColumn("Combined", format="%d", help="On Hand + L28 Sales"),
@@ -316,17 +398,93 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 }
             )
             
+            st.caption("🔲 Grey rows = ECOM (883, 886) or Clearance (3017, 3221, 7003) doors")
+            
             # Download button for full details
-            csv = summary_df.to_csv(index=False)
+            csv = summary_df.drop(columns=['Is_Special']).to_csv(index=False)
             st.download_button(
-                label="📥 Download Full Report (CSV)",
+                label="📥 Download Misallocations Report (CSV)",
                 data=csv,
-                file_name=f"redflag_report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                file_name=f"redflag_misallocations_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv"
             )
             
         else:
             st.success("✅ **ALL CLEAR!** No red flags detected. All allocations are going to stores with adequate stock.")
+        
+        # ========================================
+        # STEP 6: Display All-Out Candidates
+        # ========================================
+        st.markdown("---")
+        
+        if len(allout_candidates) > 0:
+            st.warning(f"📦 **ALL-OUT STRATEGY: {len(allout_candidates)} styles should go all-out**")
+            st.caption(f"Showing styles with < {USA_ALLOUT_THRESHOLD} units (USA) or < {CDA_ALLOUT_THRESHOLD} units (CDA) remaining after allocation")
+            
+            # Statistics
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Styles Affected", f"{len(allout_candidates)}")
+            col2.metric("Units Left Behind", f"{allout_candidates['Remaining_After_Alloc'].sum():,}")
+            col3.metric("Additional Units to Allocate", f"{allout_candidates['Remaining_After_Alloc'].sum():,}")
+            
+            # Create all-out summary
+            st.subheader("📋 All-Out Candidates")
+            
+            allout_display = []
+            for _, row in allout_candidates.iterrows():
+                base_prod = row['Base_Product']
+                
+                # Get product name and color
+                product_display = ""
+                if base_prod in product_to_details:
+                    details = product_to_details[base_prod]
+                    product_display = f"{details['style_name']} {details['color']}".strip()
+                
+                # Determine which threshold triggered
+                threshold_type = ""
+                if row['Should_AllOut_USA'] and row['Should_AllOut_CDA']:
+                    threshold_type = "Both"
+                elif row['Should_AllOut_USA']:
+                    threshold_type = f"USA (<{USA_ALLOUT_THRESHOLD})"
+                else:
+                    threshold_type = f"CDA (<{CDA_ALLOUT_THRESHOLD})"
+                
+                allout_display.append({
+                    'Product': base_prod,
+                    'Name': product_display if product_display else '-',
+                    'Total On Hand': int(row['Total_OnHand']),
+                    'Currently Allocated': int(row['Total_Allocated']),
+                    'Will Remain': int(row['Remaining_After_Alloc']),
+                    'Threshold': threshold_type
+                })
+            
+            allout_df = pd.DataFrame(allout_display)
+            allout_df = allout_df.sort_values('Will Remain', ascending=True)
+            
+            st.dataframe(
+                allout_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Product": st.column_config.TextColumn("Product", width="medium"),
+                    "Name": st.column_config.TextColumn("Product Name", width="medium"),
+                    "Total On Hand": st.column_config.NumberColumn("Total On Hand", format="%d"),
+                    "Currently Allocated": st.column_config.NumberColumn("Allocated", format="%d"),
+                    "Will Remain": st.column_config.NumberColumn("Will Remain", format="%d"),
+                    "Threshold": st.column_config.TextColumn("Threshold", width="small")
+                }
+            )
+            
+            # Download button
+            csv_allout = allout_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download All-Out Report (CSV)",
+                data=csv_allout,
+                file_name=f"redflag_allout_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.success("✅ **EFFICIENT ALLOCATION!** No styles will leave inefficient quantities in warehouse.")
         
         progress.progress(100)
         status.text("Analysis complete!")
@@ -350,6 +508,7 @@ st.sidebar.markdown("""
 2. Optionally upload Linked Lines for grouped products
 3. RedFlag checks: (On Hand + L28 Sales) ≥ Threshold
 4. Review flagged allocations before shipping
+5. Check all-out candidates to maximize efficiency
 """)
 
 st.sidebar.markdown("### File Requirements")
@@ -364,7 +523,8 @@ st.sidebar.markdown("""
 **Linked Lines:**
 - Use the 'Linked' tab
 - Column B: Order indicator (1 = new group)
-- ⚠️ Must be .xlsx format (not .xlsb)
+- Column D: Style Name
+- Column E: Color
 """)
 
 st.sidebar.markdown("### Grouping Logic")
@@ -372,6 +532,14 @@ st.sidebar.markdown("""
 Products are grouped by:
 - **Linked Lines**: From your file
 - **Dimensions**: Same style/color, different dimension (_30, _32, etc.)
+""")
+
+st.sidebar.markdown("### Special Doors")
+st.sidebar.markdown("""
+- **ECOM**: 883, 886
+- **Clearance**: 3017, 3221, 7003
+
+These doors are highlighted in grey in results.
 """)
 
 st.sidebar.markdown("### Support")
