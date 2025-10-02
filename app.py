@@ -160,8 +160,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         df = pd.read_excel(ro_file)
         
         # Create working dataframe with required columns
-        # Using column positions (A=0, G=6, H=7, I=8, M=12, Y=24, W=22)
-        working_df = df[[df.columns[i] for i in [0, 6, 7, 8, 12, 24, 22]]].copy()
+        # Using column positions (A=0, G=6, H=7, I=8, M=12, Y=24, R=17)
+        working_df = df[[df.columns[i] for i in [0, 6, 7, 8, 12, 24, 17]]].copy()
         working_df.columns = ['Store_Code', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28', 'Wh_Stock']
         
         # Clean the data
