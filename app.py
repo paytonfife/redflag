@@ -160,9 +160,9 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         df = pd.read_excel(ro_file)
         
         # Create working dataframe with required columns
-        # Using column positions (A=0, G=6, H=7, I=8, M=12, Y=24, R=17)
-        working_df = df[[df.columns[i] for i in [0, 6, 7, 8, 12, 24, 17]]].copy()
-        working_df.columns = ['Store_Code', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28', 'Wh_Stock']
+        # Using column positions (A=0, F=5, G=6, H=7, I=8, M=12, Y=24, R=17)
+        working_df = df[[df.columns[i] for i in [0, 5, 6, 7, 8, 12, 24, 17]]].copy()
+        working_df.columns = ['Store_Code', 'ProdName', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28', 'Wh_Stock']
         
         # Clean the data
         working_df['Store_Code'] = working_df['Store_Code'].astype(str)
@@ -282,7 +282,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         progress.progress(80)
         
         # Get unique SKUs with their warehouse quantities (only count each SKU once)
-        unique_skus = working_df[['SKU', 'Product_Group', 'Base_Product', 'ProdReference', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
+        unique_skus = working_df[['SKU', 'Product_Group', 'Base_Product', 'ProdReference', 'ProdName', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
         
         # Group by Product_Group (which includes linked lines) to get total warehouse inventory
         product_wh_summary = unique_skus.groupby('Product_Group').agg({
@@ -312,8 +312,11 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         st.markdown("---")
         
         if len(misallocations) > 0:
+            # Count unique product references (styles)
+            unique_styles = misallocations['ProdReference'].nunique()
+            
             # Alert box
-            st.error(f"🚩 **RED FLAGS DETECTED: {len(misallocations)} allocations need review**")
+            st.error(f"🚩 **RED FLAGS DETECTED: {unique_styles} unique styles need review**")
             
             # Statistics
             col1, col2, col3, col4 = st.columns(4)
@@ -339,11 +342,20 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     products_in_group = group_data['ProdReference'].unique()
                     base_product = group_data['Base_Product'].iloc[0]
                     
-                    # Get product name and color
+                    # Get product name from column F - find first non-null value
                     product_display = ""
-                    if base_product in product_to_details:
-                        details = product_to_details[base_product]
-                        product_display = f"{details['style_name']} {details['color']}".strip()
+                    prod_name_values = group_data['ProdName'].dropna()
+                    if len(prod_name_values) > 0:
+                        product_display = str(prod_name_values.iloc[0])
+                    
+                    # Parse product name to extract style name and color
+                    # Format is typically: "STYLE NAME||COLOR" or similar
+                    style_name = ""
+                    color = ""
+                    if product_display and '||' in product_display:
+                        parts = product_display.split('||')
+                        style_name = parts[1].strip() if len(parts) > 1 else ""
+                        color = parts[2].strip() if len(parts) > 2 else ""
                     
                     # Determine group type
                     group_type = ""
@@ -365,7 +377,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     summary_data.append({
                         'Store': store,
                         'Product': ', '.join(products_in_group[:2]) + (f' +{len(products_in_group)-2}' if len(products_in_group) > 2 else ''),
-                        'Name': product_display if product_display else '-',
+                        'Style Name': style_name if style_name else '-',
+                        'Color': color if color else '-',
                         'On Hand': int(group_data['Total_Store_Stock'].iloc[0]),
                         'L28 Sales': int(group_data['Total_Sales_28'].iloc[0]),
                         'Combined': int(group_data['Combined_Metric'].iloc[0]),
@@ -375,7 +388,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     })
             
             summary_df = pd.DataFrame(summary_data)
-            summary_df = summary_df.sort_values(['Combined', 'Units to Send'], ascending=[True, False])
+            # Sort by Style Name, then Color, then Units to Send (descending)
+            summary_df = summary_df.sort_values(['Style Name', 'Color', 'Units to Send'], ascending=[True, True, False])
             
             # Apply styling for special doors
             def highlight_special_doors(row):
@@ -393,7 +407,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 hide_index=True,
                 column_config={
                     "Store": st.column_config.TextColumn("Store", width="small"),
-                    "Name": st.column_config.TextColumn("Product Name", width="medium"),
+                    "Style Name": st.column_config.TextColumn("Style Name", width="medium"),
+                    "Color": st.column_config.TextColumn("Color", width="small"),
                     "On Hand": st.column_config.NumberColumn("On Hand", format="%d"),
                     "L28 Sales": st.column_config.NumberColumn("L28 Sales", format="%d"),
                     "Combined": st.column_config.NumberColumn("Combined", format="%d", help="On Hand + L28 Sales"),
@@ -437,17 +452,11 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 prod_group = row['Product_Group']
                 
                 # Get a representative product from this group for display
-                group_products = unique_skus[unique_skus['Product_Group'] == prod_group]['ProdReference'].unique()
-                display_product = group_products[0] if len(group_products) > 0 else prod_group
+                group_products = unique_skus[unique_skus['Product_Group'] == prod_group]
+                display_product = group_products['ProdReference'].iloc[0] if len(group_products) > 0 else prod_group
                 
-                # Get the base product for name lookup
-                base_prod = get_base_product(display_product)
-                
-                # Get product name and color
-                product_display = ""
-                if base_prod in product_to_details:
-                    details = product_to_details[base_prod]
-                    product_display = f"{details['style_name']} {details['color']}".strip()
+                # Get product name from column F (ProdName)
+                product_display = group_products['ProdName'].iloc[0] if len(group_products) > 0 and pd.notna(group_products['ProdName'].iloc[0]) else ""
                 
                 # Determine which threshold triggered
                 threshold_type = ""
