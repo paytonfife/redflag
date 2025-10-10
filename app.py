@@ -67,9 +67,12 @@ CDA_ALLOUT_THRESHOLD = st.sidebar.number_input(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**New Logic:**")
-st.sidebar.markdown("✅ Dimensions are grouped together")
-st.sidebar.markdown("✅ 28-day sales count as proof of carrying the style")
+st.sidebar.markdown("**Recent Updates:**")
+st.sidebar.markdown("✅ Auto-detects USA/CDA warehouse")
+st.sidebar.markdown("✅ Sorts by product name & color")
+st.sidebar.markdown("✅ Shows style names in results")
+st.sidebar.markdown("✅ Dimensions grouped together")
+st.sidebar.markdown("✅ L28 sales prove store carries style")
 
 # Special door constants
 ECOM_DOORS = ['883', '886']
@@ -416,6 +419,9 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             # Sort by Style Name, then Color, then Units to Send (descending)
             summary_df = summary_df.sort_values(['Style Name', 'Color', 'Units to Send'], ascending=[True, True, False])
             
+            # Add an 'Actioned' column for users to check off
+            summary_df.insert(0, 'Actioned', False)
+            
             # Apply styling for special doors
             def highlight_special_doors(row):
                 if row['Is_Special']:
@@ -425,12 +431,13 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             # Apply styling to the dataframe that still has Is_Special
             styled_df = summary_df.style.apply(highlight_special_doors, axis=1)
             
-            # Display table with formatting
-            st.dataframe(
-                styled_df,
+            # Use st.data_editor for interactive checkboxes
+            edited_df = st.data_editor(
+                summary_df,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "Actioned": st.column_config.CheckboxColumn("✓", help="Check when you've actioned this allocation"),
                     "Store": st.column_config.TextColumn("Store", width="small"),
                     "Style Name": st.column_config.TextColumn("Style Name", width="medium"),
                     "Color": st.column_config.TextColumn("Color", width="small"),
@@ -438,7 +445,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     "L28 Sales": st.column_config.NumberColumn("L28 Sales", format="%d"),
                     "Combined": st.column_config.NumberColumn("Combined", format="%d", help="On Hand + L28 Sales"),
                     "Units to Send": st.column_config.NumberColumn("To Send", format="%d"),
-                }
+                },
+                disabled=["Store", "Product", "Style Name", "Color", "On Hand", "L28 Sales", "Combined", "Units to Send", "Group Type", "Is_Special"]
             )
             
             st.caption("🔲 Grey rows = ECOM (883, 886) or Clearance (3017, 3221, 7003) doors")
