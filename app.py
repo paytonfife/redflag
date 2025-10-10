@@ -281,6 +281,26 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         status.text("Checking all-out strategy...")
         progress.progress(80)
         
+        # Identify warehouse type (USA or CDA) based on stores in the allocation
+        CDA_STORES = ['883', '3978', '3997']
+        USA_STORES = ['886', '3210', '3108', '3113']
+        
+        stores_in_file = working_df['Store_Code'].unique()
+        is_cda = any(store in CDA_STORES for store in stores_in_file)
+        is_usa = any(store in USA_STORES for store in stores_in_file)
+        
+        # Determine which threshold to use
+        if is_cda and not is_usa:
+            warehouse_type = "CDA"
+            active_threshold = CDA_ALLOUT_THRESHOLD
+        elif is_usa and not is_cda:
+            warehouse_type = "USA"
+            active_threshold = USA_ALLOUT_THRESHOLD
+        else:
+            # Default to USA if both or neither detected
+            warehouse_type = "USA (default)"
+            active_threshold = USA_ALLOUT_THRESHOLD
+        
         # Get unique SKUs with their warehouse quantities (only count each SKU once)
         unique_skus = working_df[['SKU', 'Product_Group', 'Base_Product', 'ProdReference', 'ProdName', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
         
@@ -290,16 +310,21 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         }).reset_index()
         product_wh_summary.columns = ['Product_Group', 'Warehouse_Remaining']
         
-        # Flag products that should go all-out
-        product_wh_summary['Should_AllOut_USA'] = (
+        # Calculate total allocated units per product group
+        product_allocated = working_df.groupby('Product_Group').agg({
+            'Quantity': 'sum'
+        }).reset_index()
+        product_allocated.columns = ['Product_Group', 'Total_Allocated']
+        
+        # Merge warehouse remaining with allocated quantities
+        product_wh_summary = product_wh_summary.merge(product_allocated, on='Product_Group', how='left')
+        product_wh_summary['Total_Allocated'] = product_wh_summary['Total_Allocated'].fillna(0)
+        
+        # Flag products that should go all-out based on active threshold
+        product_wh_summary['Should_AllOut'] = (
             (product_wh_summary['Warehouse_Remaining'] > 0) & 
-            (product_wh_summary['Warehouse_Remaining'] < USA_ALLOUT_THRESHOLD)
+            (product_wh_summary['Warehouse_Remaining'] < active_threshold)
         )
-        product_wh_summary['Should_AllOut_CDA'] = (
-            (product_wh_summary['Warehouse_Remaining'] > 0) & 
-            (product_wh_summary['Warehouse_Remaining'] < CDA_ALLOUT_THRESHOLD)
-        )
-        product_wh_summary['Should_AllOut'] = product_wh_summary['Should_AllOut_USA'] | product_wh_summary['Should_AllOut_CDA']
         
         allout_candidates = product_wh_summary[product_wh_summary['Should_AllOut']].copy()
         
@@ -437,7 +462,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         
         if len(allout_candidates) > 0:
             st.warning(f"📦 **ALL-OUT STRATEGY: {len(allout_candidates)} styles should go all-out**")
-            st.caption(f"Showing styles with < {USA_ALLOUT_THRESHOLD} units (USA) or < {CDA_ALLOUT_THRESHOLD} units (CDA) remaining in warehouse")
+            st.caption(f"Detected {warehouse_type} allocation - using threshold of {active_threshold} units")
             
             # Statistics
             col1, col2 = st.columns(2)
@@ -455,17 +480,19 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 group_products = unique_skus[unique_skus['Product_Group'] == prod_group]
                 display_product = group_products['ProdReference'].iloc[0] if len(group_products) > 0 else prod_group
                 
-                # Get product name from column F (ProdName)
-                product_display = group_products['ProdName'].iloc[0] if len(group_products) > 0 and pd.notna(group_products['ProdName'].iloc[0]) else ""
+                # Get product name from column F - find first non-null value
+                product_display = ""
+                prod_name_values = group_products['ProdName'].dropna()
+                if len(prod_name_values) > 0:
+                    product_display = str(prod_name_values.iloc[0])
                 
-                # Determine which threshold triggered
-                threshold_type = ""
-                if row['Should_AllOut_USA'] and row['Should_AllOut_CDA']:
-                    threshold_type = "Both"
-                elif row['Should_AllOut_USA']:
-                    threshold_type = f"USA (<{USA_ALLOUT_THRESHOLD})"
-                else:
-                    threshold_type = f"CDA (<{CDA_ALLOUT_THRESHOLD})"
+                # Parse product name to extract style name and color
+                style_name = ""
+                color = ""
+                if product_display and '||' in product_display:
+                    parts = product_display.split('||')
+                    style_name = parts[1].strip() if len(parts) > 1 else ""
+                    color = parts[2].strip() if len(parts) > 2 else ""
                 
                 # Show group info
                 group_info = ""
@@ -476,13 +503,14 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 
                 allout_display.append({
                     'Product': display_product + group_info,
-                    'Name': product_display if product_display else '-',
+                    'Style Name': style_name if style_name else '-',
+                    'Color': color if color else '-',
                     'Warehouse Remaining': int(row['Warehouse_Remaining']),
-                    'Threshold': threshold_type
+                    'Total Allocated': int(row['Total_Allocated'])
                 })
             
             allout_df = pd.DataFrame(allout_display)
-            allout_df = allout_df.sort_values('Warehouse Remaining', ascending=True)
+            allout_df = allout_df.sort_values(['Style Name', 'Color', 'Warehouse Remaining'], ascending=[True, True, True])
             
             st.dataframe(
                 allout_df,
@@ -490,9 +518,10 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 hide_index=True,
                 column_config={
                     "Product": st.column_config.TextColumn("Product", width="medium"),
-                    "Name": st.column_config.TextColumn("Product Name", width="medium"),
+                    "Style Name": st.column_config.TextColumn("Style Name", width="medium"),
+                    "Color": st.column_config.TextColumn("Color", width="small"),
                     "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d"),
-                    "Threshold": st.column_config.TextColumn("Threshold", width="small")
+                    "Total Allocated": st.column_config.NumberColumn("Total Allocated", format="%d")
                 }
             )
             
