@@ -505,8 +505,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     'Product': display_product + group_info,
                     'Style Name': style_name if style_name else '-',
                     'Color': color if color else '-',
-                    'Warehouse Remaining': int(row['Warehouse_Remaining']),
-                    'Total Allocated': int(row['Total_Allocated'])
+                    'Total Allocated': int(row['Total_Allocated']),
+                    'Warehouse Remaining': int(row['Warehouse_Remaining'])
                 })
             
             allout_df = pd.DataFrame(allout_display)
@@ -520,8 +520,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     "Product": st.column_config.TextColumn("Product", width="medium"),
                     "Style Name": st.column_config.TextColumn("Style Name", width="medium"),
                     "Color": st.column_config.TextColumn("Color", width="small"),
-                    "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d"),
-                    "Total Allocated": st.column_config.NumberColumn("Total Allocated", format="%d")
+                    "Total Allocated": st.column_config.NumberColumn("Total Allocated", format="%d"),
+                    "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d")
                 }
             )
             
