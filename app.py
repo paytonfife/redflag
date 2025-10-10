@@ -81,6 +81,10 @@ CLEARANCE_DOORS = ['3017', '3221', '7003']
 # Add a button to process
 if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
     
+    # Store file data in session state to prevent resets
+    if 'analysis_complete' not in st.session_state:
+        st.session_state.analysis_complete = False
+    
     # Initialize progress bar
     progress = st.progress(0)
     status = st.empty()
