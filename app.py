@@ -81,10 +81,6 @@ CLEARANCE_DOORS = ['3017', '3221', '7003']
 # Add a button to process
 if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
     
-    # Store file data in session state to prevent resets
-    if 'analysis_complete' not in st.session_state:
-        st.session_state.analysis_complete = False
-    
     # Initialize progress bar
     progress = st.progress(0)
     status = st.empty()
@@ -424,7 +420,10 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             summary_df = summary_df.sort_values(['Style Name', 'Color', 'Units to Send'], ascending=[True, True, False])
             
             # Add an 'Actioned' column for users to check off
-            summary_df.insert(0, 'Actioned', False)
+            # Initialize from session state if it exists
+            if 'actioned_state' not in st.session_state:
+                st.session_state.actioned_state = [False] * len(summary_df)
+            summary_df.insert(0, 'Actioned', st.session_state.actioned_state[:len(summary_df)])
             
             # Apply styling for special doors
             def highlight_special_doors(row):
@@ -440,6 +439,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 summary_df,
                 use_container_width=True,
                 hide_index=True,
+                key="misallocations_editor",
                 column_config={
                     "Actioned": st.column_config.CheckboxColumn("✓", help="Check when you've actioned this allocation"),
                     "Store": st.column_config.TextColumn("Store", width="small"),
@@ -452,6 +452,9 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                 },
                 disabled=["Store", "Product", "Style Name", "Color", "On Hand", "L28 Sales", "Combined", "Units to Send", "Group Type", "Is_Special"]
             )
+            
+            # Update session state with checkbox changes
+            st.session_state.actioned_state = edited_df['Actioned'].tolist()
             
             st.caption("🔲 Grey rows = ECOM (883, 886) or Clearance (3017, 3221, 7003) doors")
             
