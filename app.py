@@ -163,9 +163,9 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         df = pd.read_excel(ro_file)
         
         # Create working dataframe with required columns
-        # Using column positions (A=0, F=5, G=6, H=7, I=8, M=12, Y=24, R=17)
-        working_df = df[[df.columns[i] for i in [0, 5, 6, 7, 8, 12, 24, 17]]].copy()
-        working_df.columns = ['Store_Code', 'ProdName', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28', 'Wh_Stock']
+        # Using column positions (A=0, F=5, G=6, H=7, I=8, M=12, Y=24, R=17, T=19)
+        working_df = df[[df.columns[i] for i in [0, 5, 6, 7, 8, 12, 24, 17, 19]]].copy()
+        working_df.columns = ['Store_Code', 'ProdName', 'ProdReference', 'Size', 'Store_Stock', 'Quantity', 'Quantity_28', 'Wh_Stock', 'Agr_Pct']
         
         # Clean the data
         working_df['Store_Code'] = working_df['Store_Code'].astype(str)
@@ -173,6 +173,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         working_df['Quantity'] = pd.to_numeric(working_df['Quantity'], errors='coerce').fillna(0)
         working_df['Quantity_28'] = pd.to_numeric(working_df['Quantity_28'], errors='coerce').fillna(0)
         working_df['Wh_Stock'] = pd.to_numeric(working_df['Wh_Stock'], errors='coerce').fillna(0)
+        working_df['Agr_Pct'] = pd.to_numeric(working_df['Agr_Pct'], errors='coerce').fillna(0)
         
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Rows", f"{len(working_df):,}")
@@ -189,14 +190,15 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             """Extract base product without dimension suffix"""
             base_product = prod_ref
             
-            # Remove _R suffix
+            # Remove _R suffix first
             if base_product.endswith('_R'):
                 base_product = base_product[:-2]
             
-            # Check if product has dimension (ends with _XX where XX is numbers)
+            # Check if product has dimension (ends with _XX where XX is 2-3 digits only)
             if '_' in base_product:
                 parts = base_product.rsplit('_', 1)
-                if len(parts) == 2 and parts[1].isdigit():
+                if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) in [2, 3]:
+                    # This is a dimension like _30, _32, _34
                     base_product = parts[0]
             
             return base_product
@@ -206,27 +208,27 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             base_product = get_base_product(prod_ref)
             has_dimension = base_product != prod_ref.replace('_R', '')
             
-            # Check if base product is in linked groups
-            if base_product in product_to_group:
+            # First, try EXACT match with linked lines (no prefix matching)
+            if prod_ref in product_to_group:
+                group = product_to_group[prod_ref]
+                if group in linked_groups:
+                    return f"Group_{group}"
+            
+            # Try without _R suffix for exact linked lines matching
+            if prod_ref.endswith('_R'):
+                prod_no_r = prod_ref[:-2]
+                if prod_no_r in product_to_group:
+                    group = product_to_group[prod_no_r]
+                    if group in linked_groups:
+                        return f"Group_{group}"
+            
+            # Try base product (without dimension) for exact linked lines matching
+            if base_product != prod_ref and base_product in product_to_group:
                 group = product_to_group[base_product]
                 if group in linked_groups:
                     return f"Group_{group}"
             
-            # Try without _R suffix for linked lines matching
-            if base_product.endswith('_R'):
-                base_no_r = base_product[:-2]
-                if base_no_r in product_to_group:
-                    group = product_to_group[base_no_r]
-                    if group in linked_groups:
-                        return f"Group_{group}"
-            
-            # Check for prefix matches with linked products
-            for linked_prod, group in product_to_group.items():
-                if group in linked_groups:
-                    if base_product.startswith(linked_prod) or linked_prod.startswith(base_product):
-                        return f"Group_{group}"
-            
-            # If not linked but has dimension, group by base product
+            # If not linked but has dimension, group by base product (everything before last _)
             if has_dimension:
                 return f"Dim_{base_product}"
             
@@ -305,7 +307,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             active_threshold = USA_ALLOUT_THRESHOLD
         
         # Get unique SKUs with their warehouse quantities (only count each SKU once)
-        unique_skus = working_df[['SKU', 'Product_Group', 'Base_Product', 'ProdReference', 'ProdName', 'Size', 'Wh_Stock']].drop_duplicates(subset=['SKU'])
+        unique_skus = working_df[['SKU', 'Product_Group', 'Base_Product', 'ProdReference', 'ProdName', 'Size', 'Wh_Stock', 'Agr_Pct']].drop_duplicates(subset=['SKU'])
         
         # Group by Product_Group (which includes linked lines) to get total warehouse inventory
         product_wh_summary = unique_skus.groupby('Product_Group').agg({
@@ -419,12 +421,6 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             # Sort by Style Name, then Color, then Units to Send (descending)
             summary_df = summary_df.sort_values(['Style Name', 'Color', 'Units to Send'], ascending=[True, True, False])
             
-            # Add an 'Actioned' column for users to check off
-            # Initialize from session state if it exists
-            if 'actioned_state' not in st.session_state:
-                st.session_state.actioned_state = [False] * len(summary_df)
-            summary_df.insert(0, 'Actioned', st.session_state.actioned_state[:len(summary_df)])
-            
             # Apply styling for special doors
             def highlight_special_doors(row):
                 if row['Is_Special']:
@@ -434,14 +430,12 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             # Apply styling to the dataframe that still has Is_Special
             styled_df = summary_df.style.apply(highlight_special_doors, axis=1)
             
-            # Use st.data_editor for interactive checkboxes
-            edited_df = st.data_editor(
-                summary_df,
+            # Display table with formatting
+            st.dataframe(
+                styled_df,
                 use_container_width=True,
                 hide_index=True,
-                key="misallocations_editor",
                 column_config={
-                    "Actioned": st.column_config.CheckboxColumn("✓", help="Check when you've actioned this allocation"),
                     "Store": st.column_config.TextColumn("Store", width="small"),
                     "Style Name": st.column_config.TextColumn("Style Name", width="medium"),
                     "Color": st.column_config.TextColumn("Color", width="small"),
@@ -449,12 +443,8 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     "L28 Sales": st.column_config.NumberColumn("L28 Sales", format="%d"),
                     "Combined": st.column_config.NumberColumn("Combined", format="%d", help="On Hand + L28 Sales"),
                     "Units to Send": st.column_config.NumberColumn("To Send", format="%d"),
-                },
-                disabled=["Store", "Product", "Style Name", "Color", "On Hand", "L28 Sales", "Combined", "Units to Send", "Group Type", "Is_Special"]
+                }
             )
-            
-            # Update session state with checkbox changes
-            st.session_state.actioned_state = edited_df['Actioned'].tolist()
             
             st.caption("🔲 Grey rows = ECOM (883, 886) or Clearance (3017, 3221, 7003) doors")
             
@@ -509,6 +499,9 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     style_name = parts[1].strip() if len(parts) > 1 else ""
                     color = parts[2].strip() if len(parts) > 2 else ""
                 
+                # Get Agr % (sales threshold) - get first non-zero value
+                agr_pct = group_products['Agr_Pct'].iloc[0] if len(group_products) > 0 else 0
+                
                 # Show group info
                 group_info = ""
                 if prod_group.startswith('Group_'):
@@ -520,6 +513,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     'Product': display_product + group_info,
                     'Style Name': style_name if style_name else '-',
                     'Color': color if color else '-',
+                    'Sales Threshold %': int(agr_pct) if agr_pct > 0 else '-',
                     'Total Allocated': int(row['Total_Allocated']),
                     'Warehouse Remaining': int(row['Warehouse_Remaining'])
                 })
@@ -535,6 +529,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     "Product": st.column_config.TextColumn("Product", width="medium"),
                     "Style Name": st.column_config.TextColumn("Style Name", width="medium"),
                     "Color": st.column_config.TextColumn("Color", width="small"),
+                    "Sales Threshold %": st.column_config.TextColumn("Sales Threshold %", width="small", help="Current Agr % set in Nextail"),
                     "Total Allocated": st.column_config.NumberColumn("Total Allocated", format="%d"),
                     "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d")
                 }
