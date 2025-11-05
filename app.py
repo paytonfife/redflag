@@ -242,9 +242,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         working_df['Product_Group'] = working_df['ProdReference'].apply(get_product_group)
         
         # Create unique SKU identifier for warehouse calculations
-        working_df['SKU'] = working_df['ProdReference'] + '_' + working_df['Size'].astype(str)swith('Group_')]['ProdReference'].nunique()
-            dim_count = working_df[working_df['Product_Group'].str.startswith('Dim_')]['ProdReference'].nunique()
-            st.info(f"🔗 {linked_count} products in linked groups | 📏 {dim_count} products grouped by dimension")
+        working_df['SKU'] = working_df['ProdReference'] + '_' + working_df['Size'].astype(str)
         
         # ========================================
         # STEP 4: Detect Misallocations with New Logic
@@ -565,10 +563,9 @@ st.sidebar.markdown("RedFlag catches allocation mistakes before they become ship
 st.sidebar.markdown("### How it works")
 st.sidebar.markdown("""
 1. Upload your RO allocation file
-2. Optionally upload Linked Lines for grouped products
-3. RedFlag checks: (On Hand + L28 Sales) ≥ Threshold
-4. Review flagged allocations before shipping
-5. Check all-out candidates to maximize efficiency
+2. RedFlag checks: (On Hand + L28 Sales) ≥ Threshold
+3. Review flagged allocations before shipping
+4. Check all-out candidates to maximize efficiency
 """)
 
 st.sidebar.markdown("### File Requirements")
@@ -579,13 +576,12 @@ st.sidebar.markdown("""
 - I: Store Stock
 - M: Quantity to send
 - Y: 28-day sales
-- W: Warehouse stock remaining
+- R: Warehouse stock remaining
 
-**Linked Lines:**
-- Use the 'Linked' tab
-- Column B: Order indicator (1 = new group)
-- Column D: Style Name
-- Column E: Color
+**Linked Lines (auto-loaded):**
+- Mens: linked_lines_mens.xlsx
+- YC: linked_lines_yc.xlsx
+- Both use 'Linked' tab format
 """)
 
 st.sidebar.markdown("### Grouping Logic")
