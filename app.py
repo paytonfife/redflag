@@ -24,19 +24,6 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("📊 RO File")
     ro_file = st.file_uploader("Upload your RO Excel file", type=['xlsx', 'xls'], key="ro")
-
-with col2:
-    st.subheader("🔗 Linked Lines")
-    
-    # Check if default linked lines file exists in the repository
-    use_default_linked = st.checkbox("Use default Linked Lines file", value=True)
-    
-    if use_default_linked:
-        linked_file = "linked_lines_default.xlsx"
-        st.success("✅ Using default Linked Lines file")
-        st.caption("Uncheck above to upload a different version")
-    else:
-        linked_file = st.file_uploader("Upload a different Linked Lines file (.xlsx format)", type=['xlsx', 'xls'], key="linked")
     
 # Threshold setting
 st.sidebar.header("⚙️ Settings")
@@ -87,71 +74,95 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
     
     try:
         # ========================================
-        # STEP 1: Process Linked Lines (if provided)
+        # STEP 1: Process Linked Lines (load both files)
         # ========================================
         product_to_group = {}
         group_to_products = {}
         linked_groups = {}
-        product_to_details = {}  # NEW: Store product names and colors
+        product_to_details = {}  # Store product names and colors
         
-        if linked_file:
-            status.text("Processing linked lines...")
-            progress.progress(10)
-            
-            # Read the linked lines file
+        status.text("Loading linked lines files...")
+        progress.progress(10)
+        
+        # Load both mens and YC linked lines files
+        linked_files = [
+            ("linked_lines_mens.xlsx", "Mens"),
+            ("linked_lines_yc.xlsx", "YC")
+        ]
+        
+        total_products = 0
+        total_groups = 0
+        
+        for file_path, brand_name in linked_files:
             try:
-                linked_df = pd.read_excel(linked_file, sheet_name='Linked')
-            except Exception as e:
-                st.warning(f"Could not read 'Linked' sheet, trying first sheet: {str(e)}")
-                linked_df = pd.read_excel(linked_file)
-            
-            # Process the Linked tab structure
-            linked_data_list = []
-            current_group = 0
-            
-            for idx, row in linked_df.iterrows():
-                product_ref = row.iloc[0] if len(row) > 0 else None
-                order_in = row.iloc[1] if len(row) > 1 else None
-                style_name = row.iloc[3] if len(row) > 3 else None  # Column D
-                color = row.iloc[4] if len(row) > 4 else None  # Column E
+                # Read the linked lines file
+                linked_df = pd.read_excel(file_path, sheet_name='Linked')
                 
-                if pd.isna(product_ref) or pd.isna(order_in):
-                    continue
+                # Process the Linked tab structure
+                linked_data_list = []
+                current_group = max(product_to_group.values(), default=0)  # Continue numbering from last file
+                
+                for idx, row in linked_df.iterrows():
+                    product_ref = row.iloc[0] if len(row) > 0 else None
+                    order_in = row.iloc[1] if len(row) > 1 else None
+                    style_name = row.iloc[3] if len(row) > 3 else None  # Column D
+                    color = row.iloc[4] if len(row) > 4 else None  # Column E
                     
-                try:
-                    order_val = float(order_in)
-                except:
-                    continue
+                    if pd.isna(product_ref) or pd.isna(order_in):
+                        continue
+                        
+                    try:
+                        order_val = float(order_in)
+                    except:
+                        continue
+                    
+                    if order_val == 1:
+                        current_group += 1
+                    
+                    # Store product details
+                    product_key = str(product_ref).strip()
+                    if not pd.isna(style_name) or not pd.isna(color):
+                        product_to_details[product_key] = {
+                            'style_name': str(style_name) if not pd.isna(style_name) else '',
+                            'color': str(color) if not pd.isna(color) else ''
+                        }
+                    
+                    linked_data_list.append({
+                        'Group': current_group,
+                        'ProdReference': product_key
+                    })
                 
-                if order_val == 1:
-                    current_group += 1
+                linked_df_cols = pd.DataFrame(linked_data_list)
                 
-                # Store product details
-                product_key = str(product_ref).strip()
-                if not pd.isna(style_name) or not pd.isna(color):
-                    product_to_details[product_key] = {
-                        'style_name': str(style_name) if not pd.isna(style_name) else '',
-                        'color': str(color) if not pd.isna(color) else ''
-                    }
-                
-                linked_data_list.append({
-                    'Group': current_group,
-                    'ProdReference': product_key
-                })
-            
-            linked_df_cols = pd.DataFrame(linked_data_list)
-            
-            if len(linked_df_cols) > 0:
-                # Create dictionaries for lookups
-                product_to_group = dict(zip(linked_df_cols['ProdReference'], linked_df_cols['Group']))
-                
-                for group in linked_df_cols['Group'].unique():
-                    products = linked_df_cols[linked_df_cols['Group'] == group]['ProdReference'].tolist()
-                    group_to_products[group] = products
-                
-                linked_groups = {k: v for k, v in group_to_products.items() if len(v) > 1}
-                
-                st.success(f"✅ Found {len(product_to_group)} products in {len(linked_groups)} linked groups")
+                if len(linked_df_cols) > 0:
+                    # Add to dictionaries
+                    for prod_ref, group in zip(linked_df_cols['ProdReference'], linked_df_cols['Group']):
+                        product_to_group[prod_ref] = group
+                    
+                    for group in linked_df_cols['Group'].unique():
+                        products = linked_df_cols[linked_df_cols['Group'] == group]['ProdReference'].tolist()
+                        if group not in group_to_products:
+                            group_to_products[group] = []
+                        group_to_products[group].extend(products)
+                    
+                    brand_products = len(linked_df_cols)
+                    brand_groups = len([g for g in group_to_products.keys() if len(group_to_products[g]) > 1 and any(p in linked_df_cols['ProdReference'].values for p in group_to_products[g])])
+                    
+                    total_products += brand_products
+                    total_groups += brand_groups
+                    
+                    st.success(f"✅ Loaded {brand_name}: {brand_products} products in {brand_groups} groups")
+                    
+            except FileNotFoundError:
+                st.warning(f"⚠️ {file_path} not found - skipping {brand_name}")
+            except Exception as e:
+                st.warning(f"⚠️ Error loading {brand_name}: {str(e)}")
+        
+        # Create final linked_groups (only groups with multiple products)
+        linked_groups = {k: v for k, v in group_to_products.items() if len(v) > 1}
+        
+        if total_products > 0:
+            st.info(f"🔗 Total: {total_products} products in {len(linked_groups)} linked groups")
         
         # ========================================
         # STEP 2: Process RO File
@@ -481,13 +492,16 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
             for _, row in allout_candidates.iterrows():
                 prod_group = row['Product_Group']
                 
-                # Get a representative product from this group for display
-                group_products = unique_skus[unique_skus['Product_Group'] == prod_group]
-                display_product = group_products['ProdReference'].iloc[0] if len(group_products) > 0 else prod_group
+                # Get all SKUs in this group
+                group_skus = unique_skus[unique_skus['Product_Group'] == prod_group]
+                
+                # Get unique product references (not counting each size separately)
+                unique_prod_refs = group_skus['ProdReference'].unique()
+                display_product = unique_prod_refs[0] if len(unique_prod_refs) > 0 else prod_group
                 
                 # Get product name from column F - find first non-null value
                 product_display = ""
-                prod_name_values = group_products['ProdName'].dropna()
+                prod_name_values = group_skus['ProdName'].dropna()
                 if len(prod_name_values) > 0:
                     product_display = str(prod_name_values.iloc[0])
                 
@@ -500,14 +514,14 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     color = parts[2].strip() if len(parts) > 2 else ""
                 
                 # Get Agr % (sales threshold) - get first non-zero value
-                agr_pct = group_products['Agr_Pct'].iloc[0] if len(group_products) > 0 else 0
+                agr_pct = group_skus['Agr_Pct'].iloc[0] if len(group_skus) > 0 else 0
                 
-                # Show group info
+                # Show group info using unique product references count
                 group_info = ""
                 if prod_group.startswith('Group_'):
-                    group_info = f" (Linked: {len(group_products)} products)"
+                    group_info = f" (Linked: {len(unique_prod_refs)} products)"
                 elif prod_group.startswith('Dim_'):
-                    group_info = f" (Dimensions: {len(group_products)} sizes)"
+                    group_info = f" (Dimensions: {len(unique_prod_refs)} sizes)"
                 
                 allout_display.append({
                     'Product': display_product + group_info,
