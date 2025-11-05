@@ -16,14 +16,11 @@ st.set_page_config(
 
 # Title and description
 st.title("🚩 RedFlag - Allocation Guardian")
-st.markdown("**Catch misallocations before they ship!** Upload your RO file and Linked Lines to detect when inventory is being sent to stores with insufficient stock.")
+st.markdown("**Catch misallocations before they ship!** Upload your RO file to detect when inventory is being sent to stores with insufficient stock.")
 
-# Create two columns for file uploaders
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("📊 RO File")
-    ro_file = st.file_uploader("Upload your RO Excel file", type=['xlsx', 'xls'], key="ro")
+# RO File uploader - full width
+st.subheader("📊 RO File")
+ro_file = st.file_uploader("Upload your RO Excel file", type=['xlsx', 'xls'], key="ro")
     
 # Threshold setting
 st.sidebar.header("⚙️ Settings")
@@ -402,13 +399,12 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     group_type = ""
                     if prod_group.startswith('Group_'):
                         group_type = "Linked"
-                        if linked_file:
-                            group_num = float(prod_group.replace('Group_', ''))
-                            if group_num in group_to_products:
-                                all_linked = group_to_products[group_num]
-                                other_linked = [p for p in all_linked if p not in products_in_group]
-                                if other_linked:
-                                    group_type = f"Linked with {len(other_linked)} others"
+                        group_num = float(prod_group.replace('Group_', ''))
+                        if group_num in group_to_products:
+                            all_linked = group_to_products[group_num]
+                            other_linked = [p for p in all_linked if p not in products_in_group]
+                            if other_linked:
+                                group_type = f"Linked with {len(other_linked)} others"
                     elif prod_group.startswith('Dim_'):
                         group_type = "Dimension Group"
                     
