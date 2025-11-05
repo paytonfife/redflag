@@ -148,8 +148,6 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     total_products += brand_products
                     total_groups += brand_groups
                     
-                    st.success(f"✅ Loaded {brand_name}: {brand_products} products in {brand_groups} groups")
-                    
             except FileNotFoundError:
                 st.warning(f"⚠️ {file_path} not found - skipping {brand_name}")
             except Exception as e:
@@ -157,9 +155,6 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         
         # Create final linked_groups (only groups with multiple products)
         linked_groups = {k: v for k, v in group_to_products.items() if len(v) > 1}
-        
-        if total_products > 0:
-            st.info(f"🔗 Total: {total_products} products in {len(linked_groups)} linked groups")
         
         # ========================================
         # STEP 2: Process RO File
