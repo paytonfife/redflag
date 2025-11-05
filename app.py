@@ -242,12 +242,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         working_df['Product_Group'] = working_df['ProdReference'].apply(get_product_group)
         
         # Create unique SKU identifier for warehouse calculations
-        working_df['SKU'] = working_df['ProdReference'] + '_' + working_df['Size'].astype(str)
-        
-        # Count grouped products
-        grouped_products = working_df[working_df['Product_Group'].str.startswith(('Group_', 'Dim_'))]['ProdReference'].nunique()
-        if grouped_products > 0:
-            linked_count = working_df[working_df['Product_Group'].str.startswith('Group_')]['ProdReference'].nunique()
+        working_df['SKU'] = working_df['ProdReference'] + '_' + working_df['Size'].astype(str)swith('Group_')]['ProdReference'].nunique()
             dim_count = working_df[working_df['Product_Group'].str.startswith('Dim_')]['ProdReference'].nunique()
             st.info(f"🔗 {linked_count} products in linked groups | 📏 {dim_count} products grouped by dimension")
         
