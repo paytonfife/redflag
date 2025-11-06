@@ -51,12 +51,13 @@ CDA_ALLOUT_THRESHOLD = st.sidebar.number_input(
 )
 
 st.sidebar.markdown("---")
+# ⚠️ IMPORTANT: ALWAYS UPDATE THIS SECTION WITH NEW FEATURES - USER USES THIS TO VERIFY DEPLOYMENT IS LIVE
 st.sidebar.markdown("**Recent Updates:**")
+st.sidebar.markdown("✅ Warehouse imbalance detection")
+st.sidebar.markdown("✅ Multi-brand support (Mens + YC)")
 st.sidebar.markdown("✅ Auto-detects USA/CDA warehouse")
 st.sidebar.markdown("✅ Sorts by product name & color")
 st.sidebar.markdown("✅ Shows style names in results")
-st.sidebar.markdown("✅ Dimensions grouped together")
-st.sidebar.markdown("✅ L28 sales prove store carries style")
 
 # Special door constants
 ECOM_DOORS = ['883', '886']
