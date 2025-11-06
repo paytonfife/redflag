@@ -544,6 +544,88 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         else:
             st.success("✅ **EFFICIENT ALLOCATION!** No styles will leave inefficient quantities in warehouse.")
         
+        # ========================================
+        # STEP 7: Display Warehouse Imbalance
+        # ========================================
+        st.markdown("---")
+        
+        status.text("Checking warehouse imbalance...")
+        
+        # Filter out ECOM and Clearance stores
+        regular_stores_df = working_df[~working_df['Store_Code'].isin(ECOM_DOORS + CLEARANCE_DOORS)].copy()
+        
+        # Calculate for each SKU
+        sku_analysis = regular_stores_df.groupby(['ProdReference', 'Size', 'ProdName', 'Agr_Pct']).agg({
+            'Store_Stock': 'sum',
+            'Quantity': 'sum',
+            'Wh_Stock': 'first'  # Same for all rows of this SKU
+        }).reset_index()
+        
+        sku_analysis.columns = ['ProdReference', 'Size', 'ProdName', 'Agr_Pct', 'Store_Stock_Total', 'Quantity_Total', 'Wh_Stock']
+        
+        # Calculate Total Out and Difference
+        sku_analysis['Total_Out'] = sku_analysis['Store_Stock_Total'] + sku_analysis['Quantity_Total']
+        sku_analysis['Difference'] = sku_analysis['Wh_Stock'] - sku_analysis['Total_Out']
+        
+        # Flag imbalanced SKUs (warehouse has more than stores)
+        imbalanced_skus = sku_analysis[sku_analysis['Difference'] > 0].copy()
+        
+        if len(imbalanced_skus) > 0:
+            st.warning(f"🏭 **WAREHOUSE IMBALANCE: {len(imbalanced_skus)} SKUs have more units in warehouse than in stores**")
+            st.caption("SKUs with more units in warehouse than in all stores combined (excluding ECOM/Clearance)")
+            
+            # Statistics
+            col1, col2 = st.columns(2)
+            col1.metric("SKUs Affected", f"{len(imbalanced_skus)}")
+            col2.metric("Total Excess Units in Warehouse", f"{imbalanced_skus['Difference'].sum():,}")
+            
+            # Create display dataframe
+            st.subheader("📋 Over-Inventoried SKUs")
+            
+            imbalance_display = []
+            for _, row in imbalanced_skus.iterrows():
+                # Parse product name
+                product_display = str(row['ProdName']) if pd.notna(row['ProdName']) else '-'
+                
+                imbalance_display.append({
+                    'Product Reference': row['ProdReference'],
+                    'Product Name': product_display,
+                    'Size': row['Size'],
+                    'Sales Threshold %': int(row['Agr_Pct']) if row['Agr_Pct'] > 0 else '-',
+                    'Total Out': int(row['Total_Out']),
+                    'Warehouse Remaining': int(row['Wh_Stock']),
+                    'Difference': int(row['Difference'])
+                })
+            
+            imbalance_df = pd.DataFrame(imbalance_display)
+            imbalance_df = imbalance_df.sort_values('Difference', ascending=False)
+            
+            st.dataframe(
+                imbalance_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Product Reference": st.column_config.TextColumn("Product Reference", width="medium"),
+                    "Product Name": st.column_config.TextColumn("Product Name", width="medium"),
+                    "Size": st.column_config.TextColumn("Size", width="small"),
+                    "Sales Threshold %": st.column_config.TextColumn("Sales Threshold %", width="small", help="Current Agr % set in Nextail"),
+                    "Total Out": st.column_config.NumberColumn("Total Out", format="%d", help="Units in stores after allocation"),
+                    "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d"),
+                    "Difference": st.column_config.NumberColumn("Excess in Warehouse", format="%d", help="Warehouse - Total Out")
+                }
+            )
+            
+            # Download button
+            csv_imbalance = imbalance_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Warehouse Imbalance Report (CSV)",
+                data=csv_imbalance,
+                file_name=f"redflag_warehouse_imbalance_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.success("✅ **BALANCED INVENTORY!** No SKUs have excess warehouse inventory compared to stores.")
+        
         progress.progress(100)
         status.text("Analysis complete!")
         
