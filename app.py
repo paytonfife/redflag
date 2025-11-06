@@ -559,10 +559,11 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
         sku_analysis = regular_stores_df.groupby(['ProdReference', 'Size', 'ProdName', 'Agr_Pct']).agg({
             'Store_Stock': 'sum',
             'Quantity': 'sum',
-            'Wh_Stock': 'first'  # Same for all rows of this SKU
+            'Wh_Stock': 'first',  # Same for all rows of this SKU
+            'Store_Code': lambda x: ((regular_stores_df.loc[x.index, 'Store_Stock'] + regular_stores_df.loc[x.index, 'Quantity']) > 0).sum()
         }).reset_index()
         
-        sku_analysis.columns = ['ProdReference', 'Size', 'ProdName', 'Agr_Pct', 'Store_Stock_Total', 'Quantity_Total', 'Wh_Stock']
+        sku_analysis.columns = ['ProdReference', 'Size', 'ProdName', 'Agr_Pct', 'Store_Stock_Total', 'Quantity_Total', 'Wh_Stock', 'Num_Stores']
         
         # Calculate Total Out and Difference
         sku_analysis['Total_Out'] = sku_analysis['Store_Stock_Total'] + sku_analysis['Quantity_Total']
@@ -594,6 +595,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     'Size': row['Size'],
                     'Sales Threshold %': int(row['Agr_Pct']) if row['Agr_Pct'] > 0 else '-',
                     'Total Out': int(row['Total_Out']),
+                    '# Stores': int(row['Num_Stores']),
                     'Warehouse Remaining': int(row['Wh_Stock']),
                     'Difference': int(row['Difference'])
                 })
@@ -611,6 +613,7 @@ if st.button("🚩 Run RedFlag Analysis", type="primary", disabled=not ro_file):
                     "Size": st.column_config.TextColumn("Size", width="small"),
                     "Sales Threshold %": st.column_config.TextColumn("Sales Threshold %", width="small", help="Current Agr % set in Nextail"),
                     "Total Out": st.column_config.NumberColumn("Total Out", format="%d", help="Units in stores after allocation"),
+                    "# Stores": st.column_config.NumberColumn("# Stores", format="%d", help="Number of stores holding this SKU"),
                     "Warehouse Remaining": st.column_config.NumberColumn("Warehouse Remaining", format="%d"),
                     "Difference": st.column_config.NumberColumn("Excess in Warehouse", format="%d", help="Warehouse - Total Out")
                 }
